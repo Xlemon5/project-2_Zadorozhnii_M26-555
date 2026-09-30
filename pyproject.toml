@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 project = "project_2_zadorozhnii_m26_555.primitive_db.main:main"
+database = "project_2_zadorozhnii_m26_555.primitive_db.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

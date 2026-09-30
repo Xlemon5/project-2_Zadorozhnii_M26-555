@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-from project_2_zadorozhnii_m26_555.primitive_db.engine import welcome
+from project_2_zadorozhnii_m26_555.primitive_db.engine import run
 
 
 def main() -> None:
-    welcome()
+    run()
 
 
 if __name__ == "__main__":
