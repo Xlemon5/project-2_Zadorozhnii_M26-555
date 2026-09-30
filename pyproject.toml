@@ -1,0 +1,33 @@
+[project]
+name = "project-2-zadorozhnii-m26-555"
+version = "0.1.0"
+description = "A console application simulating a simple database."
+readme = "README.md"
+authors = [
+    { name = "Xlemon5", email = "80254502+Xlemon5@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "prompt>=0.4.1",
+]
+
+[project.scripts]
+project = "project_2_zadorozhnii_m26_555.primitive_db.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = ["venv", ".venv", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
