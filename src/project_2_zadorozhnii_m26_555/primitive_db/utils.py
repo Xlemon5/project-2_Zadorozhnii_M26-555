@@ -2,12 +2,14 @@ import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from project_2_zadorozhnii_m26_555.errors import CommandError
+
 COLUMN_TYPES = {"int": int, "str": str, "bool": bool}
 
 
 def validate_columns(columns: list[str]) -> list[str]:
     if not columns:
-        raise ValueError(
+        raise CommandError(
             "Некорректное значение: пустой список столбцов. Попробуйте снова."
         )
 
@@ -16,7 +18,7 @@ def validate_columns(columns: list[str]) -> list[str]:
     for column in columns:
         parts = column.split(":")
         if len(parts) != 2:
-            raise ValueError(f"Некорректное значение: {column}. Попробуйте снова.")
+            raise CommandError(f"Некорректное значение: {column}. Попробуйте снова.")
 
         name, data_type = parts
         if (
@@ -25,7 +27,7 @@ def validate_columns(columns: list[str]) -> list[str]:
             or name in column_names
             or (name == "ID" and data_type != "int")
         ):
-            raise ValueError(f"Некорректное значение: {column}. Попробуйте снова.")
+            raise CommandError(f"Некорректное значение: {column}. Попробуйте снова.")
 
         column_names.add(name)
         if name != "ID":
@@ -61,7 +63,7 @@ def save_metadata(filepath: str | Path, data: dict[str, list[str]]) -> None:
 
 def table_data_path(table_name: str) -> Path:
     if not table_name.isidentifier():
-        raise ValueError(f"Некорректное значение: {table_name}. Попробуйте снова.")
+        raise CommandError(f"Некорректное значение: {table_name}. Попробуйте снова.")
     return Path("data") / f"{table_name}.json"
 
 
@@ -81,6 +83,10 @@ def save_table_data(table_name: str, data: list[dict]) -> None:
     filepath = table_data_path(table_name)
     filepath.parent.mkdir(parents=True, exist_ok=True)
     _save_json(filepath, data)
+
+
+def delete_table_data(table_name: str) -> None:
+    table_data_path(table_name).unlink(missing_ok=True)
 
 
 def _save_json(filepath: str | Path, data: dict | list) -> None:

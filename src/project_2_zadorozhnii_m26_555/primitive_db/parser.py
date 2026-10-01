@@ -2,6 +2,8 @@ import ast
 import re
 import shlex
 
+from project_2_zadorozhnii_m26_555.errors import CommandError
+
 TOKEN_PATTERN = re.compile(
     r"""\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[(),=]|[^\s(),="'\\]+)"""
 )
@@ -16,7 +18,7 @@ def tokenize(text: str) -> list[str]:
     while position < len(text):
         match = TOKEN_PATTERN.match(text, position)
         if match is None:
-            raise ValueError("Некорректное значение: проверьте синтаксис и кавычки.")
+            raise CommandError(f"Некорректное значение: {text}. Попробуйте снова.")
         tokens.append(match.group(1))
         position = match.end()
     return tokens
@@ -31,13 +33,12 @@ def parse_value(token: str) -> int | str | bool:
         try:
             value = ast.literal_eval(token)
         except (ValueError, SyntaxError) as error:
-            raise ValueError(f"Некорректное значение: {token}.") from error
+            raise CommandError(
+                f"Некорректное значение: {token}. Попробуйте снова."
+            ) from error
         if isinstance(value, str):
             return value
-    raise ValueError(
-        f"Некорректное значение: {token}. "
-        "Используйте целое число, true/false или строку в кавычках."
-    )
+    raise CommandError(f"Некорректное значение: {token}. Попробуйте снова.")
 
 
 def _parse_assignments(tokens: list[str]) -> dict:
@@ -71,13 +72,15 @@ def parse_command(user_input: str) -> dict:
         return {"command": ""}
     command = words[0]
     if command not in TABLE_COMMANDS | DATA_COMMANDS:
-        raise ValueError(f"Функции {command} нет. Попробуйте снова.")
+        raise CommandError(f"Функции {command} нет. Попробуйте снова.")
 
     if command in TABLE_COMMANDS:
         try:
             arguments = shlex.split(user_input)
         except ValueError as error:
-            raise ValueError("Некорректное значение: проверьте кавычки.") from error
+            raise CommandError(
+                f"Некорректное значение: {user_input}. Попробуйте снова."
+            ) from error
         match arguments:
             case ["help"] | ["exit"] | ["list_tables"]:
                 return {"command": command}
@@ -124,4 +127,4 @@ def parse_command(user_input: str) -> dict:
             case ["info", table_name]:
                 return {"command": command, "table_name": table_name}
 
-    raise ValueError(f"Некорректное значение: {user_input}. Введите help для справки.")
+    raise CommandError(f"Некорректное значение: {user_input}. Попробуйте снова.")

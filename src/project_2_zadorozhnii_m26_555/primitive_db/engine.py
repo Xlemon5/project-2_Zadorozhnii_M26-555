@@ -1,6 +1,9 @@
+import json
+
 import prompt
 from prettytable import PrettyTable
 
+from project_2_zadorozhnii_m26_555.decorators import create_cacher, handle_db_errors
 from project_2_zadorozhnii_m26_555.primitive_db.core import (
     create_table,
     delete,
@@ -14,14 +17,15 @@ from project_2_zadorozhnii_m26_555.primitive_db.core import (
 )
 from project_2_zadorozhnii_m26_555.primitive_db.parser import parse_command
 from project_2_zadorozhnii_m26_555.primitive_db.utils import (
+    delete_table_data,
     load_metadata,
     load_table_data,
     save_metadata,
     save_table_data,
-    table_data_path,
 )
 
 METADATA_FILE = "db_meta.json"
+_select_cache = create_cacher()
 
 
 def print_help() -> None:
@@ -31,22 +35,28 @@ def print_help() -> None:
     print("<command> list_tables - показать список всех таблиц")
     print("<command> drop_table <имя_таблицы> - удалить таблицу")
     print("\n***Операции с данными***")
-    print("<command> insert into <таблица> values (<значение1>, ...) - создать запись")
-    print("<command> select from <таблица> - прочитать все записи")
     print(
-        "<command> select from <таблица> where <столбец> = <значение> - отбор записей"
+        "<command> insert into <имя_таблицы> values "
+        "(<значение1>, <значение2>, ...) - создать запись."
     )
     print(
-        "<command> update <таблица> set <столбец> = <значение> "
-        "where <столбец> = <значение> - обновить записи"
+        "<command> select from <имя_таблицы> where <столбец> = <значение> "
+        "- прочитать записи по условию."
+    )
+    print("<command> select from <имя_таблицы> - прочитать все записи.")
+    print(
+        "<command> update <имя_таблицы> set <столбец1> = <новое_значение1> "
+        "where <столбец_условия> = <значение_условия> - обновить запись."
     )
     print(
-        "<command> delete from <таблица> where <столбец> = <значение> - удалить записи"
+        "<command> delete from <имя_таблицы> where <столбец> = <значение> "
+        "- удалить запись."
     )
-    print("<command> info <таблица> - информация о таблице")
-    print("<command> exit - выйти из программы")
+    print("<command> info <имя_таблицы> - вывести информацию о таблице.")
+    print("<command> exit - выход из программы")
     print("<command> help - справочная информация")
     print("Типы: int, str, bool. Строки вводите в кавычках, bool — true/false.\n")
+    print("Удаление таблиц и записей требует подтверждения: y.\n")
 
 
 def print_rows(schema: dict[str, type], rows: list[dict]) -> None:
@@ -56,6 +66,20 @@ def print_rows(schema: dict[str, type], rows: list[dict]) -> None:
     print(table)
 
 
+@handle_db_errors
+def select_cached(
+    table_name: str, table_data: list[dict], where_clause: dict | None = None
+) -> list[dict]:
+    key = (
+        table_name,
+        json.dumps(where_clause, sort_keys=True, ensure_ascii=False),
+        json.dumps(table_data, sort_keys=True, ensure_ascii=False),
+    )
+    rows = _select_cache(key, lambda: select(table_data, where_clause))
+    return [row.copy() for row in rows]
+
+
+@handle_db_errors
 def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
     command = request["command"]
     if command == "list_tables":
@@ -71,29 +95,29 @@ def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
         metadata = create_table(metadata, table_name, request["columns"])
         save_table_data(table_name, [])
         save_metadata(METADATA_FILE, metadata)
+        _select_cache.cache_clear()
         print(
             f'Таблица "{table_name}" успешно создана со столбцами: '
             f"{', '.join(metadata[table_name])}"
         )
         return
     if command == "drop_table":
+        get_schema(metadata, table_name)
         metadata = drop_table(metadata, table_name)
+        if metadata is None:
+            return
         save_metadata(METADATA_FILE, metadata)
+        _select_cache.cache_clear()
         try:
-            table_data_path(table_name).unlink(missing_ok=True)
+            delete_table_data(table_name)
         except OSError as error:
             print(f"Не удалось удалить файл данных: {error}")
         print(f'Таблица "{table_name}" успешно удалена.')
         return
 
     schema = get_schema(metadata, table_name)
-    try:
-        table_data = load_table_data(table_name)
-        validate_table_data(schema, table_data)
-    except (OSError, ValueError) as error:
-        raise ValueError(
-            f'Ошибка чтения данных таблицы "{table_name}": {error}'
-        ) from error
+    table_data = load_table_data(table_name)
+    validate_table_data(schema, table_data)
 
     where_clause = request.get("where")
     if where_clause is not None:
@@ -102,27 +126,34 @@ def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
     if command == "insert":
         table_data = insert(metadata, table_name, request["values"], table_data)
         save_table_data(table_name, table_data)
+        _select_cache.cache_clear()
         print(
             f"Запись с ID={table_data[-1]['ID']} "
             f'успешно добавлена в таблицу "{table_name}".'
         )
     elif command == "select":
-        print_rows(schema, select(table_data, where_clause))
+        print_rows(schema, select_cached(table_name, table_data, where_clause))
     elif command == "info":
         print(f"Таблица: {table_name}")
         print(f"Столбцы: {', '.join(metadata[table_name])}")
         print(f"Количество записей: {len(table_data)}")
     else:
-        matched_rows = select(table_data, where_clause)
+        matched_rows = select_cached(table_name, table_data, where_clause)
         if command == "update":
             validate_clause(schema, request["set"])
             table_data = update(table_data, request["set"], where_clause)
         else:
+            if not matched_rows:
+                print("Подходящих записей не найдено.")
+                return
             table_data = delete(table_data, where_clause)
+            if table_data is None:
+                return
         if not matched_rows:
             print("Подходящих записей не найдено.")
             return
         save_table_data(table_name, table_data)
+        _select_cache.cache_clear()
         for row in matched_rows:
             if command == "update":
                 print(
@@ -136,6 +167,23 @@ def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
                 )
 
 
+@handle_db_errors
+def process_command(user_input: str) -> bool:
+    request = parse_command(user_input)
+    command = request["command"]
+    if not command:
+        return True
+    if command == "exit":
+        return False
+    if command == "help":
+        print_help()
+        return True
+
+    metadata = load_metadata(METADATA_FILE)
+    execute_command(metadata, request)
+    return True
+
+
 def run() -> None:
     print_help()
 
@@ -146,30 +194,5 @@ def run() -> None:
             print()
             return
 
-        try:
-            request = parse_command(user_input)
-        except ValueError as error:
-            print(error)
-            continue
-
-        command = request["command"]
-        if not command:
-            continue
-        if command == "exit":
+        if process_command(user_input) is False:
             return
-        if command == "help":
-            print_help()
-            continue
-
-        try:
-            metadata = load_metadata(METADATA_FILE)
-        except (OSError, ValueError) as error:
-            print(f"Ошибка чтения метаданных: {error}")
-            continue
-
-        try:
-            execute_command(metadata, request)
-        except ValueError as error:
-            print(error)
-        except OSError as error:
-            print(f"Ошибка работы с файлами: {error}")
