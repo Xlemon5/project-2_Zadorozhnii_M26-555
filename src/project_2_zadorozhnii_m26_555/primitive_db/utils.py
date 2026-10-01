@@ -2,7 +2,36 @@ import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from project_2_zadorozhnii_m26_555.primitive_db.core import validate_columns
+COLUMN_TYPES = {"int": int, "str": str, "bool": bool}
+
+
+def validate_columns(columns: list[str]) -> list[str]:
+    if not columns:
+        raise ValueError(
+            "Некорректное значение: пустой список столбцов. Попробуйте снова."
+        )
+
+    result = ["ID:int"]
+    column_names = set()
+    for column in columns:
+        parts = column.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Некорректное значение: {column}. Попробуйте снова.")
+
+        name, data_type = parts
+        if (
+            not name.isidentifier()
+            or data_type not in COLUMN_TYPES
+            or name in column_names
+            or (name == "ID" and data_type != "int")
+        ):
+            raise ValueError(f"Некорректное значение: {column}. Попробуйте снова.")
+
+        column_names.add(name)
+        if name != "ID":
+            result.append(column)
+
+    return result
 
 
 def load_metadata(filepath: str | Path) -> dict[str, list[str]]:
@@ -27,6 +56,34 @@ def load_metadata(filepath: str | Path) -> dict[str, list[str]]:
 
 
 def save_metadata(filepath: str | Path, data: dict[str, list[str]]) -> None:
+    _save_json(filepath, data)
+
+
+def table_data_path(table_name: str) -> Path:
+    if not table_name.isidentifier():
+        raise ValueError(f"Некорректное значение: {table_name}. Попробуйте снова.")
+    return Path("data") / f"{table_name}.json"
+
+
+def load_table_data(table_name: str) -> list[dict]:
+    try:
+        with table_data_path(table_name).open(encoding="utf-8") as table_file:
+            data = json.load(table_file)
+    except FileNotFoundError:
+        return []
+
+    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+        raise ValueError(f'Некорректные данные таблицы "{table_name}".')
+    return data
+
+
+def save_table_data(table_name: str, data: list[dict]) -> None:
+    filepath = table_data_path(table_name)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    _save_json(filepath, data)
+
+
+def _save_json(filepath: str | Path, data: dict | list) -> None:
     filepath = Path(filepath)
     temporary_path = None
     try:
