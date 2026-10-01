@@ -1,44 +1,52 @@
 import json
-from pathlib import Path
-from tempfile import NamedTemporaryFile
+import os
 
-from project_2_zadorozhnii_m26_555.errors import CommandError
-
-COLUMN_TYPES = {"int": int, "str": str, "bool": bool}
+from project_2_zadorozhnii_m26_555.constants import (
+    COLUMN_TYPES,
+    DATA_DIRECTORY,
+    FILE_ENCODING,
+    ID_COLUMN,
+    ID_DEFINITION,
+    JSON_INDENT,
+    TEMP_NAME_BYTES,
+)
+from project_2_zadorozhnii_m26_555.errors import command_error
 
 
 def validate_columns(columns: list[str]) -> list[str]:
+    """Проверяет определения столбцов и помещает единственный ID первым."""
     if not columns:
-        raise CommandError(
+        raise command_error(
             "Некорректное значение: пустой список столбцов. Попробуйте снова."
         )
 
-    result = ["ID:int"]
+    result = [ID_DEFINITION]
     column_names = set()
     for column in columns:
         parts = column.split(":")
         if len(parts) != 2:
-            raise CommandError(f"Некорректное значение: {column}. Попробуйте снова.")
+            raise command_error(f"Некорректное значение: {column}. Попробуйте снова.")
 
         name, data_type = parts
         if (
             not name.isidentifier()
             or data_type not in COLUMN_TYPES
             or name in column_names
-            or (name == "ID" and data_type != "int")
+            or (name == ID_COLUMN and data_type != "int")
         ):
-            raise CommandError(f"Некорректное значение: {column}. Попробуйте снова.")
+            raise command_error(f"Некорректное значение: {column}. Попробуйте снова.")
 
         column_names.add(name)
-        if name != "ID":
+        if name != ID_COLUMN:
             result.append(column)
 
     return result
 
 
-def load_metadata(filepath: str | Path) -> dict[str, list[str]]:
+def load_metadata(filepath: str | os.PathLike) -> dict[str, list[str]]:
+    """Загружает и проверяет схему; отсутствие файла означает пустую базу."""
     try:
-        with open(filepath, encoding="utf-8") as metadata_file:
+        with open(filepath, encoding=FILE_ENCODING) as metadata_file:
             data = json.load(metadata_file)
     except FileNotFoundError:
         return {}
@@ -57,19 +65,22 @@ def load_metadata(filepath: str | Path) -> dict[str, list[str]]:
     return data
 
 
-def save_metadata(filepath: str | Path, data: dict[str, list[str]]) -> None:
+def save_metadata(filepath: str | os.PathLike, data: dict[str, list[str]]) -> None:
+    """Атомарно сохраняет метаданные таблиц в JSON."""
     _save_json(filepath, data)
 
 
-def table_data_path(table_name: str) -> Path:
+def table_data_path(table_name: str) -> str:
+    """Возвращает путь данных, запрещая выход за пределы их директории."""
     if not table_name.isidentifier():
-        raise CommandError(f"Некорректное значение: {table_name}. Попробуйте снова.")
-    return Path("data") / f"{table_name}.json"
+        raise command_error(f"Некорректное значение: {table_name}. Попробуйте снова.")
+    return os.path.join(DATA_DIRECTORY, f"{table_name}.json")
 
 
 def load_table_data(table_name: str) -> list[dict]:
+    """Читает записи таблицы, возвращая пустой список при отсутствии файла."""
     try:
-        with table_data_path(table_name).open(encoding="utf-8") as table_file:
+        with open(table_data_path(table_name), encoding=FILE_ENCODING) as table_file:
             data = json.load(table_file)
     except FileNotFoundError:
         return []
@@ -80,31 +91,42 @@ def load_table_data(table_name: str) -> list[dict]:
 
 
 def save_table_data(table_name: str, data: list[dict]) -> None:
+    """Создаёт директорию данных и атомарно сохраняет записи таблицы."""
     filepath = table_data_path(table_name)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(DATA_DIRECTORY, exist_ok=True)
     _save_json(filepath, data)
 
 
 def delete_table_data(table_name: str) -> None:
-    table_data_path(table_name).unlink(missing_ok=True)
+    """Удаляет файл таблицы; отсутствие файла не считается ошибкой."""
+    _remove_file(table_data_path(table_name))
 
 
-def _save_json(filepath: str | Path, data: dict | list) -> None:
-    filepath = Path(filepath)
-    temporary_path = None
+def _remove_file(filepath: str | os.PathLike) -> None:
+    """Удаляет существующий файл, игнорируя только FileNotFoundError."""
     try:
-        with NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=filepath.parent,
-            prefix=f".{filepath.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as metadata_file:
-            temporary_path = Path(metadata_file.name)
-            json.dump(data, metadata_file, ensure_ascii=False, indent=2)
-            metadata_file.write("\n")
-        temporary_path.replace(filepath)
+        os.remove(filepath)
+    except FileNotFoundError:
+        pass
+
+
+def _save_json(filepath: str | os.PathLike, data: dict | list) -> None:
+    """Записывает временный JSON рядом с целевым файлом и заменяет оригинал."""
+    filepath = os.fspath(filepath)
+    while True:
+        suffix = os.urandom(TEMP_NAME_BYTES).hex()
+        temporary_path = os.path.join(
+            os.path.dirname(filepath), f".{os.path.basename(filepath)}.{suffix}.tmp"
+        )
+        try:
+            temporary_file = open(temporary_path, "x", encoding=FILE_ENCODING)
+        except FileExistsError:
+            continue
+        break
+    try:
+        with temporary_file:
+            json.dump(data, temporary_file, ensure_ascii=False, indent=JSON_INDENT)
+            temporary_file.write("\n")
+        os.replace(temporary_path, filepath)
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        _remove_file(temporary_path)

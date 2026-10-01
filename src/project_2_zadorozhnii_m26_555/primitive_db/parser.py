@@ -1,84 +1,140 @@
-import ast
-import re
+import json
 import shlex
 
-from project_2_zadorozhnii_m26_555.errors import CommandError
-
-TOKEN_PATTERN = re.compile(
-    r"""\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[(),=]|[^\s(),="'\\]+)"""
+from project_2_zadorozhnii_m26_555.constants import (
+    ASSIGNMENT_LENGTH,
+    ASSIGNMENT_STRIDE,
+    DATA_COMMANDS,
+    STRING_QUOTES,
+    TABLE_COMMANDS,
+    TOKEN_PUNCTUATION,
 )
-TABLE_COMMANDS = {"create_table", "drop_table", "list_tables", "help", "exit"}
-DATA_COMMANDS = {"insert", "select", "update", "delete", "info"}
+from project_2_zadorozhnii_m26_555.errors import command_error
+
+
+def _read_quoted_token(text: str, position: int) -> tuple[str, int]:
+    """Читает строковый токен с учётом экранированных кавычек."""
+    quote = text[position]
+    end = position + 1
+    while end < len(text):
+        if text[end] == "\\":
+            end += 2
+        elif text[end] == quote:
+            return text[position : end + 1], end + 1
+        else:
+            end += 1
+    raise command_error(f"Некорректное значение: {text}. Попробуйте снова.")
 
 
 def tokenize(text: str) -> list[str]:
+    """Разбивает команду на слова, знаки и строки, сохраняя кавычки."""
     tokens = []
     text = text.strip()
     position = 0
     while position < len(text):
-        match = TOKEN_PATTERN.match(text, position)
-        if match is None:
-            raise CommandError(f"Некорректное значение: {text}. Попробуйте снова.")
-        tokens.append(match.group(1))
-        position = match.end()
+        character = text[position]
+        if character.isspace():
+            position += 1
+        elif character in STRING_QUOTES:
+            token, position = _read_quoted_token(text, position)
+            tokens.append(token)
+        elif character in TOKEN_PUNCTUATION:
+            tokens.append(character)
+            position += 1
+        elif character == "\\":
+            raise command_error(f"Некорректное значение: {text}. Попробуйте снова.")
+        else:
+            start = position
+            while (
+                position < len(text)
+                and not text[position].isspace()
+                and text[position] not in TOKEN_PUNCTUATION + STRING_QUOTES + "\\"
+            ):
+                position += 1
+            tokens.append(text[start:position])
     return tokens
 
 
+def _parse_string(token: str) -> str:
+    """Преобразует строку в кавычках через JSON, не исполняя Python-код."""
+    _, end = _read_quoted_token(token, 0)
+    if end != len(token):
+        raise command_error(f"Некорректное значение: {token}. Попробуйте снова.")
+    encoded = ['"']
+    position = 1
+    while position < len(token) - 1:
+        character = token[position]
+        if character == "\\":
+            escaped = token[position + 1]
+            encoded.append("'" if escaped == "'" else "\\" + escaped)
+            position += 2
+        else:
+            encoded.append('\\"' if character == '"' else character)
+            position += 1
+    encoded.append('"')
+    try:
+        return json.loads("".join(encoded))
+    except ValueError as error:
+        raise command_error(
+            f"Некорректное значение: {token}. Попробуйте снова."
+        ) from error
+
+
 def parse_value(token: str) -> int | str | bool:
+    """Разбирает целое число, true/false или строку в кавычках."""
     if token in {"true", "false"}:
         return token == "true"
-    if re.fullmatch(r"[+-]?\d+", token):
+    digits = token[1:] if token.startswith(("+", "-")) else token
+    if digits and digits.isdecimal():
         return int(token)
-    if token.startswith(('"', "'")):
-        try:
-            value = ast.literal_eval(token)
-        except (ValueError, SyntaxError) as error:
-            raise CommandError(
-                f"Некорректное значение: {token}. Попробуйте снова."
-            ) from error
-        if isinstance(value, str):
-            return value
-    raise CommandError(f"Некорректное значение: {token}. Попробуйте снова.")
+    if token and token[0] in STRING_QUOTES:
+        return _parse_string(token)
+    raise command_error(f"Некорректное значение: {token}. Попробуйте снова.")
 
 
 def _parse_assignments(tokens: list[str]) -> dict:
-    if len(tokens) % 4 != 3:
+    """Собирает словарь присваиваний, разделённых запятыми."""
+    if len(tokens) % ASSIGNMENT_STRIDE != ASSIGNMENT_LENGTH:
         raise ValueError("Некорректное условие. Ожидается столбец = значение.")
     result = {}
-    for position in range(0, len(tokens), 4):
-        column, operator, value = tokens[position : position + 3]
+    for position in range(0, len(tokens), ASSIGNMENT_STRIDE):
+        boundary = position + ASSIGNMENT_LENGTH
+        column, operator, value = tokens[position:boundary]
         if not column.isidentifier() or operator != "=" or column in result:
             raise ValueError("Некорректное условие или повторяющийся столбец.")
-        if position + 3 < len(tokens) and tokens[position + 3] != ",":
+        if boundary < len(tokens) and tokens[boundary] != ",":
             raise ValueError("Присваивания в set должны разделяться запятыми.")
         result[column] = parse_value(value)
     return result
 
 
 def parse_where(text: str) -> dict:
+    """Разбирает одно условие равенства для where."""
     tokens = tokenize(text)
-    if len(tokens) != 3:
+    if len(tokens) != ASSIGNMENT_LENGTH:
         raise ValueError("В where требуется одно условие: столбец = значение.")
     return _parse_assignments(tokens)
 
 
 def parse_set(text: str) -> dict:
+    """Разбирает одно или несколько присваиваний для set."""
     return _parse_assignments(tokenize(text))
 
 
 def parse_command(user_input: str) -> dict:
+    """Возвращает команду с аргументами или сообщает об ошибке синтаксиса."""
     words = user_input.split(maxsplit=1)
     if not words:
         return {"command": ""}
     command = words[0]
     if command not in TABLE_COMMANDS | DATA_COMMANDS:
-        raise CommandError(f"Функции {command} нет. Попробуйте снова.")
+        raise command_error(f"Функции {command} нет. Попробуйте снова.")
 
     if command in TABLE_COMMANDS:
         try:
             arguments = shlex.split(user_input)
         except ValueError as error:
-            raise CommandError(
+            raise command_error(
                 f"Некорректное значение: {user_input}. Попробуйте снова."
             ) from error
         match arguments:
@@ -114,9 +170,9 @@ def parse_command(user_input: str) -> dict:
                     "where": parse_where(" ".join(condition)),
                 }
             case ["update", table_name, "set", *assignments]:
-                boundary = 3
+                boundary = ASSIGNMENT_LENGTH
                 while boundary < len(assignments) and assignments[boundary] == ",":
-                    boundary += 4
+                    boundary += ASSIGNMENT_STRIDE
                 if boundary < len(assignments) and assignments[boundary] == "where":
                     return {
                         "command": command,
@@ -127,4 +183,4 @@ def parse_command(user_input: str) -> dict:
             case ["info", table_name]:
                 return {"command": command, "table_name": table_name}
 
-    raise CommandError(f"Некорректное значение: {user_input}. Попробуйте снова.")
+    raise command_error(f"Некорректное значение: {user_input}. Попробуйте снова.")

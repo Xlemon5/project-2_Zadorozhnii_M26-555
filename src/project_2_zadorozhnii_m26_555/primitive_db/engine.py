@@ -3,6 +3,11 @@ import json
 import prompt
 from prettytable import PrettyTable
 
+from project_2_zadorozhnii_m26_555.constants import (
+    ID_COLUMN,
+    INPUT_PROMPT,
+    METADATA_FILE,
+)
 from project_2_zadorozhnii_m26_555.decorators import create_cacher, handle_db_errors
 from project_2_zadorozhnii_m26_555.primitive_db.core import (
     create_table,
@@ -24,11 +29,11 @@ from project_2_zadorozhnii_m26_555.primitive_db.utils import (
     save_table_data,
 )
 
-METADATA_FILE = "db_meta.json"
 _select_cache = create_cacher()
 
 
 def print_help() -> None:
+    """Печатает все команды управления таблицами и данными."""
     print("\n***База данных***")
     print("Функции:")
     print("<command> create_table <имя_таблицы> <столбец1:тип> ... - создать таблицу")
@@ -60,6 +65,7 @@ def print_help() -> None:
 
 
 def print_rows(schema: dict[str, type], rows: list[dict]) -> None:
+    """Выводит записи через PrettyTable в порядке столбцов схемы."""
     table = PrettyTable()
     table.field_names = list(schema)
     table.add_rows([[row[column] for column in schema] for row in rows])
@@ -70,6 +76,7 @@ def print_rows(schema: dict[str, type], rows: list[dict]) -> None:
 def select_cached(
     table_name: str, table_data: list[dict], where_clause: dict | None = None
 ) -> list[dict]:
+    """Возвращает изолированную копию кэшированной выборки таблицы."""
     key = (
         table_name,
         json.dumps(where_clause, sort_keys=True, ensure_ascii=False),
@@ -81,6 +88,7 @@ def select_cached(
 
 @handle_db_errors
 def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
+    """Выполняет разобранную команду, сохраняет изменения и обновляет кэш."""
     command = request["command"]
     if command == "list_tables":
         if metadata:
@@ -128,7 +136,7 @@ def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
         save_table_data(table_name, table_data)
         _select_cache.cache_clear()
         print(
-            f"Запись с ID={table_data[-1]['ID']} "
+            f"Запись с ID={table_data[-1][ID_COLUMN]} "
             f'успешно добавлена в таблицу "{table_name}".'
         )
     elif command == "select":
@@ -157,18 +165,19 @@ def execute_command(metadata: dict[str, list[str]], request: dict) -> None:
         for row in matched_rows:
             if command == "update":
                 print(
-                    f'Запись с ID={row["ID"]} в таблице "{table_name}" '
+                    f'Запись с ID={row[ID_COLUMN]} в таблице "{table_name}" '
                     "успешно обновлена."
                 )
             else:
                 print(
-                    f"Запись с ID={row['ID']} успешно удалена "
+                    f"Запись с ID={row[ID_COLUMN]} успешно удалена "
                     f'из таблицы "{table_name}".'
                 )
 
 
 @handle_db_errors
 def process_command(user_input: str) -> bool:
+    """Обрабатывает ввод; False завершает цикл, ошибка возвращает None."""
     request = parse_command(user_input)
     command = request["command"]
     if not command:
@@ -185,11 +194,12 @@ def process_command(user_input: str) -> bool:
 
 
 def run() -> None:
+    """Запускает консольный цикл до команды exit, EOF или Ctrl+C."""
     print_help()
 
     while True:
         try:
-            user_input = prompt.string(">>>Введите команду: ")
+            user_input = prompt.string(INPUT_PROMPT)
         except (EOFError, KeyboardInterrupt):
             print()
             return
